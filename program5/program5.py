@@ -1,19 +1,27 @@
 import time
+import utime
 # import accelerometer modules
 from pimoroni_i2c import PimoroniI2C
 from pimoroni import PICO_EXPLORER_I2C_PINS
 from breakout_msa301 import BreakoutMSA301
 
+# Import Buzzer
+from pimoroni import Buzzer
+
 # import graphics and jpeg decoder
 import picographics
 import jpegdec
 
-# NOTE - YOU MUST CREATE THE DISPLAY FIRST, BEFORE CONNECTING TO ACCELEROMETER
+# NOTE - YOU MUST CREATE THE DISPLAY FIRST, DO THIS BEFORE CONNECTING TO ACCELEROMETER
 # Configure display on Pico Explorer Board
 display = picographics.PicoGraphics(display=picographics.DISPLAY_PICO_EXPLORER)
 j = jpegdec.JPEG(display) # jpeg decoder
 default_img = "lofi.jpeg" # default picture when no alarm is present
 alarm_img = "home_alone.jpg" # alarm picture when movement is detected
+
+# Create a buzzer on pin 0
+# Don't forget to wire GP0 to AUDIO!
+buzzer = Buzzer(0)
 
 # Create connection to accelerometer
 i2c = PimoroniI2C(**PICO_EXPLORER_I2C_PINS)
@@ -21,8 +29,7 @@ msa = BreakoutMSA301(i2c)
 # Configure accelerometer
 part_id = msa.part_id()
 print("Found MSA301 (accel). Part ID: 0x", '{:02x}'.format(part_id), sep="")
-# msa.enable_interrupts(BreakoutMSA301.FREEFALL | BreakoutMSA301.ORIENTATION)
-# print(dir(msa))
+msa.enable_interrupts(BreakoutMSA301.FREEFALL | BreakoutMSA301.ORIENTATION)
 
 def update_image(alarm=False):
     fpath_img = alarm_img if alarm else default_img
@@ -34,15 +41,15 @@ def update_image(alarm=False):
     display.update()
 
 # gather data for calibration
-time_to_gather_data = 5
-start_time = time.time()
+time_to_gather_data = 5000
+start_time = utime.ticks_ms()
 
 x_vals = []
 y_vals = []
 z_vals = []
 
-print(f"Gathering data for {time_to_gather_data} seconds to perform calibration....")
-while time.time() < (start_time + time_to_gather_data):
+print(f"Gathering data for {time_to_gather_data/1000} seconds to perform calibration....")
+while (utime.ticks_ms() - start_time) < time_to_gather_data:
     x = msa.get_x_axis()
     y = msa.get_y_axis()
     z = msa.get_z_axis()
@@ -50,7 +57,7 @@ while time.time() < (start_time + time_to_gather_data):
     x_vals.append(x)
     y_vals.append(y)
     z_vals.append(z)
-    time.sleep(0.1)
+    utime.sleep_ms(100)
     
 
 def gather_stats(x_vals):
@@ -77,14 +84,28 @@ def out_of_range(val, mean, std, multiplier=3):
 
 alarm = False
 alarm_time = None
-alarm_reset_time = 5 # seconds
+alarm_reset_time = 5000 # ms
+sleep_time = 100
+print_accel_values = False
+
+def play_alarm(alarm, alarm_time):
+    "Play alarm if motion is detected"
+    if not alarm:
+        return
+    current_tick = utime.ticks_ms()
+    percent = (current_tick - alarm_time) / alarm_reset_time
+    tone = percent * 10_000
+    tone = int(tone) if percent < 0.5 else int(10_000 - tone)
+    buzzer.set_tone(tone)
 
 update_image(alarm)
 while True:
     # Alarm reset
-    if alarm and time.time() > (alarm_time + alarm_reset_time):
+    current_tick = utime.ticks_ms()
+    if alarm and (current_tick - alarm_time) > alarm_reset_time:
         alarm = False
         update_image(alarm)
+        buzzer.set_tone(0)
     
     # get data
     x = msa.get_x_axis()
@@ -101,20 +122,23 @@ while True:
     current_alarm_flag = x_flag or y_flag or z_flag
     if not alarm and current_alarm_flag:
         alarm = True
-        alarm_time = time.time()
+        alarm_time = utime.ticks_ms()
         update_image(alarm)
     
 
-    print("X:", x, end=",\t")
-    print("Y:", y, end=",\t")
-    print("Z:", z, end=",\t")
-    print("Freefall?", freefall, end=",\t")
-    print("Orientation:", orientation)
+    play_alarm(alarm, alarm_time)
+
+    if print_accel_values:
+        print("X:", x, end=",\t")
+        print("Y:", y, end=",\t")
+        print("Z:", z, end=",\t")
+        print("Freefall?", freefall, end=",\t")
+        print("Orientation:", orientation)
     
 #     if alarm:
 #         print("ALARM")
     
-    time.sleep(0.1)
+    utime.sleep_ms(sleep_time)
     
     
 # Orientation
